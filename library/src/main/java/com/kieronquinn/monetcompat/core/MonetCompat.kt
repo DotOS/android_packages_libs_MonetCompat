@@ -16,7 +16,6 @@ import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
 import androidx.palette.graphics.Palette
 import com.kieronquinn.monetcompat.R
-import com.kieronquinn.monetcompat.app.MonetCompatActivity
 import com.kieronquinn.monetcompat.extensions.getAttributeColor
 import com.kieronquinn.monetcompat.extensions.isDarkMode
 import com.kieronquinn.monetcompat.extensions.isSameAs
@@ -34,12 +33,6 @@ class MonetCompat private constructor(context: Context) {
         private var INSTANCE: MonetCompat? = null
         private var paletteCompatEnabled = false
         private const val TAG = "MonetCompat"
-
-        /**
-         *  Set the multiplier of the chroma of the generated colors, defaults to `1.0`
-         */
-        @JvmStatic
-        var chromaMultiplier = 1.0
 
         /**
          *  Enable some debug logging to the "MonetCompat" tag
@@ -85,6 +78,16 @@ class MonetCompat private constructor(context: Context) {
         }
 
         /**
+         *  Get the current MonetCompat instance, throws a [MonetInstanceException] if unavailable
+         */
+        @JvmStatic
+        fun getInstance(chroma: Double): MonetCompat {
+            val instance = INSTANCE ?: throw MonetInstanceException()
+            instance.chromaMultiplier = chroma
+            return instance
+        }
+
+        /**
          *  Enable getting the wallpaper's primary color on Android 8.0 and below, using
          *  androidx.palette. You must include Palette as a dependency in your gradle to use this
          *  and the user should have granted READ_EXTERNAL_STORAGE, though this doesn't seem
@@ -121,6 +124,11 @@ class MonetCompat private constructor(context: Context) {
             it?.firstOrNull()
         }
     }
+
+    /**
+     *  Set the multiplier of the chroma of the generated colors, defaults to `1.0`
+     */
+    var chromaMultiplier = 1.0
 
     private val wallpaperManager by lazy {
         context.getSystemService(Context.WALLPAPER_SERVICE) as WallpaperManager
@@ -308,7 +316,7 @@ class MonetCompat private constructor(context: Context) {
         return if(darkMode ?: context.isDarkMode){
             monetColors?.accent1?.get(100)?.toArgb() ?: ContextCompat.getColor(context, defaultAccentColor!!)
         }else{
-            monetColors?.accent1?.get(700)?.toArgb() ?: ContextCompat.getColor(context, defaultAccentColor!!)
+            monetColors?.accent1?.get(500)?.toArgb() ?: ContextCompat.getColor(context, defaultAccentColor!!)
         }
     }
 

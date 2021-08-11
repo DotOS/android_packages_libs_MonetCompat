@@ -1,9 +1,6 @@
 package com.kieronquinn.monetcompat.extensions
 
-import android.R
 import android.content.res.ColorStateList
-import android.graphics.Color
-import android.os.Build
 import com.afollestad.materialdialogs.MaterialDialog
 import com.afollestad.materialdialogs.WhichButton
 import com.afollestad.materialdialogs.actions.getActionButton
@@ -27,24 +24,19 @@ fun MaterialDialog.applyMonet(applyNavigationBarColor: Boolean = false){
         view.contentLayout.setBackgroundColor(backgroundColor)
         view.buttonsLayout?.setBackgroundColor(backgroundColor)
         if(applyNavigationBarColor){
-            //Light navigation background not supported on < 8.1
-            if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                window?.navigationBarColor = backgroundColor
-            }else{
-                window?.navigationBarColor = Color.BLACK
-            }
+            window?.navigationBarColor = backgroundColor
         }
     }
     val updateButtons = {
         val accentColor = monet.getAccentColor(context)
         val disabledColor = monet.getSecondaryColor(context)
         val textColor = ColorStateList(
-            arrayOf(intArrayOf(R.attr.state_enabled), intArrayOf()),
+            arrayOf(intArrayOf(android.R.attr.state_enabled), intArrayOf()),
             intArrayOf(accentColor, disabledColor)
         )
-        getActionButton(WhichButton.POSITIVE)?.setTextColor(textColor)
-        getActionButton(WhichButton.NEGATIVE)?.setTextColor(textColor)
-        getActionButton(WhichButton.NEUTRAL)?.setTextColor(textColor)
+        getActionButton(WhichButton.POSITIVE).setTextColor(textColor)
+        getActionButton(WhichButton.NEGATIVE).setTextColor(textColor)
+        getActionButton(WhichButton.NEUTRAL).setTextColor(textColor)
     }
     val changeListener = object: MonetColorsChangedListener {
         override fun onMonetColorsChanged(monet: MonetCompat, monetColors: DynamicColorScheme, isInitialChange: Boolean) {
