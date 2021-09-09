@@ -5,15 +5,15 @@ import dev.kdrag0n.monet.colors.Lch.Companion.calcLabB
 import dev.kdrag0n.monet.colors.Lch.Companion.calcLchC
 import dev.kdrag0n.monet.colors.Lch.Companion.calcLchH
 
-data class CieLch(
+data class Srlch2(
     override val L: Double,
     override val C: Double,
     override val h: Double,
 ) : Lch {
-    override fun toLinearSrgb() = toCieLab().toLinearSrgb()
+    override fun toLinearSrgb() = toSrlab2().toLinearSrgb()
 
-    fun toCieLab(): CieLab {
-        return CieLab(
+    fun toSrlab2(): Srlab2 {
+        return Srlab2(
             L = L,
             a = calcLabA(),
             b = calcLabB(),
@@ -21,8 +21,8 @@ data class CieLch(
     }
 
     companion object {
-        fun CieLab.toCieLch(): CieLch {
-            return CieLch(
+        fun Srlab2.toSrlch2(): Srlch2 {
+            return Srlch2(
                 L = L,
                 C = calcLchC(),
                 h = calcLchH(),

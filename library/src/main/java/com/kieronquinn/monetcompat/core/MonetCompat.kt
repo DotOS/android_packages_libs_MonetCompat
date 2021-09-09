@@ -21,11 +21,17 @@ import com.kieronquinn.monetcompat.extensions.isDarkMode
 import com.kieronquinn.monetcompat.extensions.isSameAs
 import com.kieronquinn.monetcompat.extensions.toArgb
 import com.kieronquinn.monetcompat.interfaces.MonetColorsChangedListener
+import dev.kdrag0n.monet.colors.CieLab
+import dev.kdrag0n.monet.colors.Illuminants
 import dev.kdrag0n.monet.colors.Srgb
-import dev.kdrag0n.monet.theme.DynamicColorScheme
-import dev.kdrag0n.monet.theme.TargetColors
+import dev.kdrag0n.monet.colors.Zcam
+import dev.kdrag0n.monet.theme.ZcamDynamicColorScheme
+import dev.kdrag0n.monet.theme.ZcamMaterialYouTargets
 import kotlinx.coroutines.*
 import kotlin.coroutines.resume
+import kotlin.math.log10
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 class MonetCompat private constructor(context: Context) {
 
@@ -33,6 +39,10 @@ class MonetCompat private constructor(context: Context) {
         private var INSTANCE: MonetCompat? = null
         private var paletteCompatEnabled = false
         private const val TAG = "MonetCompat"
+
+        private const val WHITE_LUMINANCE_MIN = 1.0
+        private const val WHITE_LUMINANCE_MAX = 10000.0
+        private const val WHITE_LUMINANCE_USER_MAX = 1000
 
         /**
          *  Enable some debug logging to the "MonetCompat" tag
@@ -58,7 +68,7 @@ class MonetCompat private constructor(context: Context) {
          */
         @JvmStatic
         fun setup(context: Context): MonetCompat {
-            if(INSTANCE != null){
+            if (INSTANCE != null) {
                 INSTANCE!!.updateConfiguration(context)
                 return INSTANCE!!
             }
@@ -81,9 +91,10 @@ class MonetCompat private constructor(context: Context) {
          *  Get the current MonetCompat instance, throws a [MonetInstanceException] if unavailable
          */
         @JvmStatic
-        fun getInstance(chroma: Double): MonetCompat {
+        fun getInstance(chroma: Double, whiteLuminance: Double): MonetCompat {
             val instance = INSTANCE ?: throw MonetInstanceException()
             instance.chromaMultiplier = chroma
+            instance.whiteLuminance = whiteLuminance
             return instance
         }
 
@@ -97,12 +108,12 @@ class MonetCompat private constructor(context: Context) {
          */
         @JvmStatic
         @RequiresPermission(Manifest.permission.READ_EXTERNAL_STORAGE, conditional = true)
-        fun enablePaletteCompat(){
+        fun enablePaletteCompat() {
             try {
                 //Check palette is available
                 Class.forName("androidx.palette.graphics.Palette")
                 paletteCompatEnabled = true
-            }catch (e: ClassNotFoundException){
+            } catch (e: ClassNotFoundException) {
                 throw MonetPaletteException()
             }
         }
@@ -130,11 +141,13 @@ class MonetCompat private constructor(context: Context) {
      */
     var chromaMultiplier = 1.0
 
+    var whiteLuminance = 425.0
+
     private val wallpaperManager by lazy {
         context.getSystemService(Context.WALLPAPER_SERVICE) as WallpaperManager
     }
 
-    private val wallpaperChangedReceiver = object: BroadcastReceiver() {
+    private val wallpaperChangedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             updateMonetColorsInternal()
         }
@@ -150,10 +163,10 @@ class MonetCompat private constructor(context: Context) {
      */
     var defaultPrimaryColor: Int? = null
         get() {
-            return if(field == null){
+            return if (field == null) {
                 theme.getAttributeColor(android.R.attr.colorPrimary)
                     ?: throw MonetAttributeNotFoundException("android.R.attr.colorPrimary")
-            }else field
+            } else field
         }
 
     /**
@@ -164,10 +177,10 @@ class MonetCompat private constructor(context: Context) {
      */
     var defaultSecondaryColor: Int? = null
         get() {
-            return if(field == null){
+            return if (field == null) {
                 theme.getAttributeColor(R.attr.colorPrimaryVariant)
                     ?: throw MonetAttributeNotFoundException("R.attr.colorPrimaryVariant")
-            }else field
+            } else field
         }
 
     /**
@@ -177,10 +190,10 @@ class MonetCompat private constructor(context: Context) {
      */
     var defaultBackgroundColor: Int? = null
         get() {
-            return if(field == null){
+            return if (field == null) {
                 theme.getAttributeColor(android.R.attr.windowBackground)
                     ?: throw MonetAttributeNotFoundException("android.R.attr.windowBackground")
-            }else field
+            } else field
         }
 
     /**
@@ -190,10 +203,10 @@ class MonetCompat private constructor(context: Context) {
      */
     var defaultAccentColor: Int? = null
         get() {
-            return if(field == null){
+            return if (field == null) {
                 theme.getAttributeColor(android.R.attr.colorAccent)
                     ?: throw MonetAttributeNotFoundException("android.R.attr.colorAccent")
-            }else field
+            } else field
         }
 
     /**
@@ -207,49 +220,59 @@ class MonetCompat private constructor(context: Context) {
         getDefaultColors()
     }
 
-    private var monetColors: DynamicColorScheme? = null
+    private var monetColors: ZcamDynamicColorScheme? = null
     private var darkTheme: Boolean? = null
     private lateinit var theme: Resources.Theme
 
     /**
-     *  Gets the wallpaper primary color, creates a [DynamicColorScheme] with it (or use defaults),
+     *  Gets the wallpaper primary color, creates a [ZcamDynamicColorScheme] with it (or use defaults),
      *  then calls out to all the listeners if it's different to the previous scheme.
      *
      *  Getting the wallpaper colors from [WallpaperManager] is recommended to be run on an I/O thread
      *  due to IPC, and Palette needs to be run on I/O in the case of being in Palette compat mode,
      *  so the [Dispatchers.IO] dispatcher is used here.
      */
-    private fun updateMonetColorsInternal(isUiModeChange: Boolean = false) = GlobalScope.launch(Dispatchers.IO) {
-        val primaryColor = getWallpaperPrimaryColorCompat()
-        wallpaperPrimaryColor = primaryColor
-        val newMonetColors = if(primaryColor != null){
-            if(debugLog){
-                Log.i(TAG, "Got wallpaper primary color #${Integer.toHexString(primaryColor)}")
+    private fun updateMonetColorsInternal(isUiModeChange: Boolean = false) =
+        GlobalScope.launch(Dispatchers.IO) {
+            val primaryColor = getWallpaperPrimaryColorCompat()
+            wallpaperPrimaryColor = primaryColor
+            val cond = createZcamViewingConditions(parseWhiteLuminanceUser(whiteLuminance.roundToInt()))
+            val newMonetColors = if (primaryColor != null) {
+                if (debugLog) {
+                    Log.i(TAG, "Got wallpaper primary color #${Integer.toHexString(primaryColor)}")
+                }
+                ZcamDynamicColorScheme(
+                    ZcamMaterialYouTargets(chromaMultiplier, true, cond),
+                    Srgb(primaryColor),
+                    chromaMultiplier,
+                    cond
+                )
+            } else {
+                if (debugLog) {
+                    Log.w(
+                        TAG,
+                        "Unable to get primary color from wallpaper, using default app colors"
+                    )
+                }
+                defaultColorScheme
             }
-            DynamicColorScheme(TargetColors(chromaMultiplier), Srgb(primaryColor), chromaMultiplier)
-        }else{
-            if(debugLog){
-                Log.w(TAG, "Unable to get primary color from wallpaper, using default app colors")
-            }
-            defaultColorScheme
-        }
-        val hasChanged = isUiModeChange || !newMonetColors.isSameAs(monetColors)
-        val isInitialChange = monetColors == null
-        monetColors = newMonetColors
-        if(hasChanged) {
-            withContext(Dispatchers.Main) {
-                monetColorsChangedListeners.forEach {
-                    it.onMonetColorsChanged(this@MonetCompat, newMonetColors, isInitialChange)
+            val hasChanged = isUiModeChange || !newMonetColors.isSameAs(monetColors)
+            val isInitialChange = monetColors == null
+            monetColors = newMonetColors
+            if (hasChanged) {
+                withContext(Dispatchers.Main) {
+                    monetColorsChangedListeners.forEach {
+                        it.onMonetColorsChanged(this@MonetCompat, newMonetColors, isInitialChange)
+                    }
                 }
             }
         }
-    }
 
     /**
      *  Manually trigger a re-processing of wallpaper colors, without a configuration change
      *  Result will be sent to [MonetColorsChangedListener.onMonetColorsChanged]
      */
-    fun updateMonetColors(){
+    fun updateMonetColors() {
         updateMonetColorsInternal()
     }
 
@@ -258,7 +281,7 @@ class MonetCompat private constructor(context: Context) {
      *  available. This prevents the need to re-calculate all the colors and notify all the listeners
      *  after one has been attached.
      */
-    private fun notifySelfListener(listener: MonetColorsChangedListener){
+    private fun notifySelfListener(listener: MonetColorsChangedListener) {
         monetColors?.let {
             listener.onMonetColorsChanged(this, it, false)
         }
@@ -268,7 +291,7 @@ class MonetCompat private constructor(context: Context) {
      *  Returns the full set of Monet colors produced, or the default if they've not been
      *  generated / can't be generated
      */
-    fun getMonetColors(): DynamicColorScheme {
+    fun getMonetColors(): ZcamDynamicColorScheme {
         return monetColors ?: defaultColorScheme
     }
 
@@ -280,11 +303,17 @@ class MonetCompat private constructor(context: Context) {
      *  @param darkMode An optional override for whether to use dark mode
      */
     fun getBackgroundColor(context: Context, darkMode: Boolean? = null): Int {
-        return if(darkMode ?: context.isDarkMode){
-            monetColors?.neutral1?.get(900)?.toArgb() ?: ContextCompat.getColor(context, defaultBackgroundColor!!)
-        }else{
+        return if (darkMode ?: context.isDarkMode) {
+            monetColors?.neutral1?.get(900)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultBackgroundColor!!
+            )
+        } else {
 
-            monetColors?.neutral1?.get(50)?.toArgb() ?: ContextCompat.getColor(context, defaultBackgroundColor!!)
+            monetColors?.neutral1?.get(50)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultBackgroundColor!!
+            )
         }
     }
 
@@ -298,9 +327,9 @@ class MonetCompat private constructor(context: Context) {
      *  @param darkMode An optional override for whether to use dark mode
      */
     fun getBackgroundColorSecondary(context: Context, darkMode: Boolean? = null): Int? {
-        return if(darkMode ?: context.isDarkMode){
+        return if (darkMode ?: context.isDarkMode) {
             monetColors?.neutral1?.get(700)?.toArgb()
-        }else{
+        } else {
             monetColors?.neutral1?.get(100)?.toArgb()
         }
     }
@@ -313,10 +342,16 @@ class MonetCompat private constructor(context: Context) {
      *  @param darkMode An optional override for whether to use dark mode
      */
     fun getAccentColor(context: Context, darkMode: Boolean? = null): Int {
-        return if(darkMode ?: context.isDarkMode){
-            monetColors?.accent1?.get(100)?.toArgb() ?: ContextCompat.getColor(context, defaultAccentColor!!)
-        }else{
-            monetColors?.accent1?.get(500)?.toArgb() ?: ContextCompat.getColor(context, defaultAccentColor!!)
+        return if (darkMode ?: context.isDarkMode) {
+            monetColors?.accent1?.get(100)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultAccentColor!!
+            )
+        } else {
+            monetColors?.accent1?.get(500)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultAccentColor!!
+            )
         }
     }
 
@@ -328,10 +363,16 @@ class MonetCompat private constructor(context: Context) {
      *  @param darkMode An optional override for whether to use dark mode
      */
     fun getPrimaryColor(context: Context, darkMode: Boolean? = null): Int {
-        return if(darkMode ?: context.isDarkMode){
-            monetColors?.accent2?.get(600)?.toArgb() ?: ContextCompat.getColor(context, defaultPrimaryColor!!)
-        }else{
-            monetColors?.accent2?.get(100)?.toArgb() ?: ContextCompat.getColor(context, defaultPrimaryColor!!)
+        return if (darkMode ?: context.isDarkMode) {
+            monetColors?.accent2?.get(600)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultPrimaryColor!!
+            )
+        } else {
+            monetColors?.accent2?.get(100)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultPrimaryColor!!
+            )
         }
     }
 
@@ -343,10 +384,16 @@ class MonetCompat private constructor(context: Context) {
      *  @param darkMode An optional override for whether to use dark mode
      */
     fun getSecondaryColor(context: Context, darkMode: Boolean? = null): Int {
-        return if(darkMode ?: context.isDarkMode){
-            monetColors?.accent2?.get(400)?.toArgb() ?: ContextCompat.getColor(context, defaultSecondaryColor!!)
-        }else{
-            monetColors?.accent2?.get(300)?.toArgb() ?: ContextCompat.getColor(context, defaultSecondaryColor!!)
+        return if (darkMode ?: context.isDarkMode) {
+            monetColors?.accent2?.get(400)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultSecondaryColor!!
+            )
+        } else {
+            monetColors?.accent2?.get(300)?.toArgb() ?: ContextCompat.getColor(
+                context,
+                defaultSecondaryColor!!
+            )
         }
     }
 
@@ -356,10 +403,10 @@ class MonetCompat private constructor(context: Context) {
      *  onConfigurationChanged(Context) in your activity
      *  @param context Your context that has configuration, **not** application context
      */
-    fun updateConfiguration(context: Context){
+    fun updateConfiguration(context: Context) {
         val isDarkTheme = context.isDarkMode
         theme = context.theme
-        if(darkTheme != null && darkTheme != isDarkTheme){
+        if (darkTheme != null && darkTheme != isDarkTheme) {
             updateMonetColorsInternal(true)
         }
         darkTheme = context.isDarkMode
@@ -371,10 +418,13 @@ class MonetCompat private constructor(context: Context) {
      *  and MonetCompat instance when the colors change
      *  @param listener The interface to receive Monet color changes
      */
-    fun addMonetColorsChangedListener(listener: MonetColorsChangedListener, notifySelf: Boolean = false){
-        if(!monetColorsChangedListeners.contains(listener)){
+    fun addMonetColorsChangedListener(
+        listener: MonetColorsChangedListener,
+        notifySelf: Boolean = false
+    ) {
+        if (!monetColorsChangedListeners.contains(listener)) {
             monetColorsChangedListeners.add(listener)
-            if(notifySelf){
+            if (notifySelf) {
                 notifySelfListener(listener)
             }
         }
@@ -384,8 +434,8 @@ class MonetCompat private constructor(context: Context) {
      *  Remove an interface from receiving Monet color changes
      *  @param listener The interface to stop receive Monet color changes
      */
-    fun removeMonetColorsChangedListener(listener: MonetColorsChangedListener){
-        if(monetColorsChangedListeners.contains(listener)){
+    fun removeMonetColorsChangedListener(listener: MonetColorsChangedListener) {
+        if (monetColorsChangedListeners.contains(listener)) {
             monetColorsChangedListeners.remove(listener)
         }
     }
@@ -397,15 +447,15 @@ class MonetCompat private constructor(context: Context) {
      */
     suspend fun awaitMonetReady() = suspendCancellableCoroutine<Unit> {
         //Just resume if already ready
-        if(monetColors != null){
+        if (monetColors != null) {
             it.resume(Unit)
             return@suspendCancellableCoroutine
         }
         //Not ready, add a listener and resume when called
-        val listener = object: MonetColorsChangedListener {
+        val listener = object : MonetColorsChangedListener {
             override fun onMonetColorsChanged(
                 monet: MonetCompat,
-                monetColors: DynamicColorScheme,
+                monetColors: ZcamDynamicColorScheme,
                 isInitialChange: Boolean
             ) {
                 removeMonetColorsChangedListener(this)
@@ -424,17 +474,50 @@ class MonetCompat private constructor(context: Context) {
      *  ACTION_WALLPAPER_CHANGED is deprecated (but still works) - we can't use FLAG_SHOW_WALLPAPER
      *  as it's not suitable for our use case
      */
-    private fun registerWallpaperChangedReceiver(context: Context){
+    private fun registerWallpaperChangedReceiver(context: Context) {
         @Suppress("DEPRECATION")
-        context.registerReceiver(wallpaperChangedReceiver, IntentFilter(Intent.ACTION_WALLPAPER_CHANGED))
+        context.registerReceiver(
+            wallpaperChangedReceiver,
+            IntentFilter(Intent.ACTION_WALLPAPER_CHANGED)
+        )
     }
 
     /**
-     *  Get a [DynamicColorScheme] instance for the [defaultPrimaryColor] and specified [chromaMultiplier]
+     *  Get a [ZcamDynamicColorScheme] instance for the [defaultPrimaryColor] and specified [chromaMultiplier]
      */
-    private fun getDefaultColors(): DynamicColorScheme {
-        return DynamicColorScheme(TargetColors(chromaMultiplier), Srgb(defaultPrimaryColor!!), chromaMultiplier)
+    private fun getDefaultColors(): ZcamDynamicColorScheme {
+        return ZcamDynamicColorScheme(
+            ZcamMaterialYouTargets(
+                chromaMultiplier,
+                true,
+                createZcamViewingConditions(parseWhiteLuminanceUser(whiteLuminance.roundToInt()))
+            ),
+            Srgb(defaultPrimaryColor!!),
+            chromaMultiplier,
+            createZcamViewingConditions(parseWhiteLuminanceUser(whiteLuminance.roundToInt()))
+        )
     }
+
+    private fun parseWhiteLuminanceUser(userValue: Int): Double {
+        val userSrc = userValue.toDouble() / WHITE_LUMINANCE_USER_MAX
+        val userInv = 1.0 - userSrc
+        return (10.0).pow(userInv * log10(WHITE_LUMINANCE_MAX))
+            .coerceAtLeast(WHITE_LUMINANCE_MIN)
+    }
+
+    private fun createZcamViewingConditions(whiteLuminance: Double) = Zcam.ViewingConditions(
+        F_s = Zcam.ViewingConditions.SURROUND_AVERAGE,
+        // sRGB
+        L_a = 0.4 * whiteLuminance,
+        // Gray world
+        Y_b = CieLab(
+            L = 50.0,
+            a = 0.0,
+            b = 0.0,
+        ).toCieXyz().y * whiteLuminance,
+        referenceWhite = Illuminants.D65 * whiteLuminance,
+        whiteLuminance = whiteLuminance,
+    )
 
     /**
      *  Gets the color(s) from the wallpaper using the following logic:
@@ -493,15 +576,20 @@ class MonetCompat private constructor(context: Context) {
      */
     @RequiresApi(Build.VERSION_CODES.O_MR1)
     private fun WallpaperColors.getColorOptions(): List<Int> {
-        return arrayOf(primaryColor, secondaryColor, tertiaryColor).filterNot { it == null }.distinct().map { it!!.toArgb() }
+        return arrayOf(primaryColor, secondaryColor, tertiaryColor).filterNot { it == null }
+            .distinct().map { it!!.toArgb() }
     }
 
     /**
      *  Creates an array of the three picked colors from [Palette] to go into the color picker
      */
     private fun Palette.getColorOptions(): List<Int>? {
-        val colors = arrayOf(getDominantColor(0), getVibrantColor(0), this.getMutedColor(0)).filterNot { it == 0 }.distinct()
-        return if(colors.isNotEmpty()) colors
+        val colors = arrayOf(
+            getDominantColor(0),
+            getVibrantColor(0),
+            this.getMutedColor(0)
+        ).filterNot { it == 0 }.distinct()
+        return if (colors.isNotEmpty()) colors
         else null
     }
 

@@ -8,7 +8,7 @@ import com.afollestad.materialdialogs.callbacks.onDismiss
 import com.afollestad.materialdialogs.callbacks.onShow
 import com.kieronquinn.monetcompat.core.MonetCompat
 import com.kieronquinn.monetcompat.interfaces.MonetColorsChangedListener
-import dev.kdrag0n.monet.theme.DynamicColorScheme
+import dev.kdrag0n.monet.theme.ZcamDynamicColorScheme
 
 /**
  *  Applies Monet colors to a MaterialDialog, this will *not* work before MonetCompat is
@@ -39,7 +39,7 @@ fun MaterialDialog.applyMonet(applyNavigationBarColor: Boolean = false){
         getActionButton(WhichButton.NEUTRAL).setTextColor(textColor)
     }
     val changeListener = object: MonetColorsChangedListener {
-        override fun onMonetColorsChanged(monet: MonetCompat, monetColors: DynamicColorScheme, isInitialChange: Boolean) {
+        override fun onMonetColorsChanged(monet: MonetCompat, monetColors: ZcamDynamicColorScheme, isInitialChange: Boolean) {
             updateBackground.invoke()
             updateButtons.invoke()
         }
